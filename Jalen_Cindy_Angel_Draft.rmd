@@ -1,0 +1,311 @@
+---
+title: "Draft Analysis"
+author: "Jalen Souksamlane, Cindy Wong, Angel Chen"
+date: "2/29/2020"
+output: pdf_document
+---
+# Research Question
+Is there a relationship between the predictors (frequency of characters, length of email, certain common key words, etc.) and whether an email is considered spam or not? If so, which predictors affect the response?
+
+# Data
+response: spam (0 indicates non-spam email, 1 indicates spam email)
+
+predictors: 57 numeric variables (frequency of keywords/characters and lengths of uninterrupted sequences of capital letters)
+
+```{r include=FALSE}
+names <- c('make','address','all','3d','our','over','remove','internet','order','mail','receive', 'will','people','report','addresses','free','business','email','you','credit','your','font','000','money','hp','hpl','george','650','lab','labs','telnet','857','data','415','85','technology','1999','parts','pm','direct','cs','meeting','original','project','re','edu','table','conference','semi.colon','parenthesis','bracket','exclamation','dollar.sign','pound','capital_run_length_average','capital_run_length_longest','capital_run_length_total','spam')
+data <- read.table('~/DOCUMENTS/PSTAT131/Project/spambase.data', sep = ',', col.names = names)
+dim(data)
+
+data$spam <- as.factor(data$spam)
+```
+
+# Sampling, 60% training set, 20% validation set, 20% test set
+```{r}
+set.seed(1)
+RNGkind(sample.kind="Rejection")
+sample1 <- sample(1:nrow(data), 0.6*nrow(data)) 
+train <- data[sample1,] 
+forty_percent <- data[-sample1,]
+
+sample2 <- sample(1:nrow(forty_percent), 0.5*nrow(forty_percent))
+validation <- forty_percent[sample2,]
+test <- forty_percent[-sample2,]
+```
+
+# Methods
+
+## Logistic Regression
+```{r}
+set.seed(1)
+log_fit <- glm(spam ~ ., data = train, family = "binomial")
+summary(log_fit)
+par(mfrow=c(2,2))
+plot(log_fit)
+log_aic_F <- step(log_fit)
+log_aic_B<- step(log_fit, direction = 'backward')
+summary(log_fit_2)
+```
+
+```{r}
+prob.training = predict(log_aic_F, newdata = validation, type="response")
+
+round(prob.training, digits=2)
+
+predictedlabels <- ifelse (prob.training> 0.5, 1,0)
+table(predict=predictedlabels, truth=validation$spam)
+reduced <- mean(predictedlabels != validation$spam)
+
+prob.training = predict(log_fit, newdata = validation, type="response")
+
+round(prob.training, digits=2)
+
+predictedlabels <- ifelse (prob.training> 0.5, 1,0)
+table(predict=predictedlabels, truth=validation$spam)
+full <- mean(predictedlabels != validation$spam)
+
+```
+From fitting the model through logistic regression, the error rate is 7.5%. However, there is perfect separation in our logistic model so we may need to edit it.
+
+## Decision Trees
+```{r}
+#fitting a decision tree
+set.seed(1)
+library(tree)
+tree_fit <- tree(spam ~. , data=train)
+plot(tree_fit)
+text(tree_fit, pretty=0, cex = 0.7)
+```
+
+```{r}
+#using 10-fold CV to select best tree size
+tree_cv <- cv.tree(tree_fit, FUN=prune.misclass, K=10)
+
+#best size
+best_cv <- min(tree_cv$size[tree_cv$dev==min(tree_cv$dev)])
+best_cv
+
+#pruning tree to optimal size
+tree_prune <- prune.misclass(tree_fit, best=best_cv)
+
+#test error rate for pruned tree
+tree_pred <- predict(tree_prune, newdata = validation, type = "class")
+table(tree_pred, truth = validation$spam)
+tree <- mean(tree_pred != validation$spam)
+```
+Doing a 10-fold CV on our decision tree resulted in a validation error rate of around 8.9%, which is not too bad.
+
+## Bagging
+```{r}
+#bagging with 500 trees
+set.seed(1)
+library(randomForest)
+bag_fit <- randomForest(spam~., data=train, mtry=57, importance=TRUE)
+bag_fit
+```
+
+```{r fig1, fig.width = 5, fig.asp = .62}
+plot(bag_fit)
+legend("top", colnames(bag_fit$err.rate), col=1:4, cex=0.8, fill=1:4) #needs caption
+
+#test error rate for bagging
+bag_pred <- predict(bag_fit, newdata = validation)
+table(bag_pred, truth = validation$spam)
+bagging <- mean(bag_pred != validation$spam)
+```
+Bagging with 500 trees results in a validation error rate of around 5.7%, which is an improvement over the validation error rate from doing a 10-fold CV on our decision tree.
+
+## Random Forest
+```{r}
+#growing a random forest
+set.seed(1)
+forest_fit <- randomForest(spam~., data=train, mtry=sqrt(57), importance=TRUE)
+forest_fit
+```
+
+```{r fig2, fig.width = 5, fig.asp = .62}
+plot(forest_fit)
+legend("top", colnames(forest_fit$err.rate), col=1:4, cex=0.8, fill=1:4)
+
+#test error rate for random forest
+forest_pred <- predict(forest_fit, newdata = validation)
+table(forest_pred, truth = validation$spam)
+forest <- mean(forest_pred != validation$spam)
+```
+Doing a random forest results in a validation error rate of 5.1%. This is a slight improvement over the validation error rate from bagging with 500 trees.
+
+```{r}
+varImpPlot(forest_fit, sort = TRUE, main = "Variable Importance for forest_fit", n.var=5)
+```
+Across all of the trees in the random forest, exclamation is the most important variable in terms of model accuracy and Gini index. The predictors, capital_run_length_average and dollar.sign are important, as well.
+
+## Boosting
+```{r}
+#boosting 
+set.seed(1)
+library(gbm)
+boost_fit <- gbm(ifelse(train$spam=="1", 1, 0)~., data=train, distribution="bernoulli", 
+n.trees=500, interaction.depth = 4)
+head(summary(boost_fit))
+```
+This summary output shows us that once again, exclamation is the most important predictor. 
+
+```{r}
+boost_prob <- predict(boost_fit, newdata=validation, n.trees=500, type="response")
+boost_pred <- ifelse(boost_prob > 0.5, 1, 0)
+
+table(boost_pred, truth = validation$spam)
+boosting <- mean(boost_pred != validation$spam)
+```
+Boosting with 500 trees results in a validation error rate of around 5.4%.
+
+## Support Vector Machines (Linear)
+
+From the logistic regression summary and classification tree, we found the most significant variables. We will proceed with these 9 variables for support vector machines.
+```{r}
+set.seed(1)
+library(e1071)
+svmfit = svm(spam ~ dollar.sign+remove+exclamation+free+
+               money+capital_run_length_total+george+hp+edu, data=train, 
+kernel="linear", cost=0.1, scale=FALSE)
+```
+```{r include=FALSE}
+svmfit$index
+summary(svmfit)
+```
+
+Perform cross validation to find the best cost for the model
+```{r}
+set.seed (1)
+tune.out = tune(svm, spam ~ dollar.sign+remove+exclamation+free+
+                  money+capital_run_length_total+george+hp+edu, data=train,kernel="linear", 
+ranges=list(cost=c(0.001, 0.01, 0.1, 1,5,10,100)))
+summary(tune.out)
+```
+When cost = 1e2, the error rate is the lowest.
+
+```{r}
+bestmod=tune.out$best.model
+summary(bestmod)
+```
+
+From the best model, the number of support vectors is lower compared to the first model.
+Now we will test the model using the validation set.
+```{r}
+ypred = predict(bestmod, validation)
+table(predict=ypred, truth=validation$spam)
+svmLinear <- mean(ypred != validation$spam)
+```
+The error rate for the linear model is 10%
+
+## Support Vector Machines (Radial)
+```{r}
+set.seed(1)
+library(e1071)
+svmfit = svm(spam ~ dollar.sign+remove+exclamation+free+
+               money+capital_run_length_total+george+hp+edu, data=train, kernel="radial", 
+gamma=1, cost =1)
+```
+```{r include=FALSE}
+svmfit$index
+```
+```{r}
+summary (svmfit)
+```
+
+Perform cross validation to find the best gamma for the model
+```{r}
+tune.out = tune(svm, spam ~ dollar.sign+remove+exclamation+free+
+                  money+capital_run_length_total+george+hp+edu, data=train, 
+kernel="radial", ranges=list(cost=c(0.1,1,10,100,1000), gamma=c(0.5,1,2,3,4)))
+summary(tune.out)
+```
+When cost = 1e2 and gamma = 0.5, the error rate is the lowest.
+
+```{r}
+bestmod = tune.out$best.model
+summary(bestmod)
+```
+
+Testing the model using validation set.
+```{r}
+ypred = predict(bestmod, validation)
+table(predict=ypred, truth=validation$spam)
+svmRadial <- mean(ypred != validation$spam)
+```
+The error rate for the radial model is 8.7%
+
+## KNN
+```{r}
+library(dplyr)
+library(class)
+set.seed(1)
+# creating response vector for training set
+y.train <- train$spam
+# creating design matrix for training set with two variables
+x.train <- train %>% dplyr::select(-spam)
+x.train <- scale(x.train,center=TRUE,scale=TRUE)
+# creating response vector and design matrix for test set
+meanvec <- attr(x.train,'scaled:center')
+sdvec <- attr(x.train,'scaled:scale')
+y.val <- validation$spam
+x.val <- validation %>% dplyr::select(-spam) %>% scale(center=meanvec,scale=sdvec)
+
+# Set validation.error (a vector) to save validation errors in future
+validation.error = NULL
+# Give possible number of nearest neighbours to be considered
+allK = 1:50
+for (i in allK){ # Loop through different number of neighbors
+  pred.Yval = knn.cv(train=x.train, cl=y.train, k=i) # Predict on the left-out validation set
+  validation.error = c(validation.error, mean(pred.Yval!=y.train))# Combine all validation errors
+}
+
+error.rate <- 100-validation.error*100
+plot(allK,error.rate,type='b',xlab='K-Value',ylab='Accuracy rate',)
+
+numneighbor <- max(allK[validation.error == min(validation.error)])
+numneighbor
+```
+k=5 (chosen by LOOCV)
+
+```{r}
+# training the classifier and making predictions on the training set
+pred.y.train <- knn(train=x.val,test=x.val,cl=y.val,k=numneighbor)
+
+# calculating the confusion matrix
+conf.train <- table(predicted=pred.y.train,observed=y.val)
+conf.train
+
+# train accuracy rate
+knn <- 1-sum(diag(conf.train)/sum(conf.train))
+```
+The validation error for k=5 is around 9.7%
+
+```{r}
+Method <- c('Logistic Regression (FullModel)', 'Logistic Regression (ReducedModel)','Decision Tree', 'Bagging', 'Random Forest', 'Boosting', 'SVM(Linear)', 'SVM(Radial)', 'KNN')
+Error_Rate <- c(full,reduced,tree,bagging,forest,boosting,svmLinear,svmRadial,knn)
+data.frame(Method,Error_Rate)
+```
+
+```{r}
+par(mfrow=c(3,3))
+
+boxplot(data$dollar.sign~data$spam, horizontal = TRUE)
+boxplot(data$remove~data$spam, horizontal = TRUE)
+boxplot(data$exclamation~data$spam, horizontal = TRUE)
+boxplot(data$free~data$spam, horizontal = TRUE)
+boxplot(data$money~data$spam, horizontal = TRUE)
+boxplot(data$capital_run_length_total~data$spam, horizontal = TRUE)
+boxplot(data$george~data$spam, horizontal = TRUE)
+boxplot(data$hp~data$spam, horizontal = TRUE)
+boxplot(data$edu~data$spam, horizontal = TRUE)
+```
+"dollar.sign"              "remove"                   "exclamation"             
+"free"                     "money"                    "capital_run_length_total"
+"george"                   "hp"                       "edu"
+
+
+
+
+
+
