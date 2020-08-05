@@ -6,4 +6,4 @@ Group project for PSTAT 131
 - Dataset
 - Row and Column names for Dataset
 - Project Proprosal
-- Final Project
+- Final Project with rmarkdown code
